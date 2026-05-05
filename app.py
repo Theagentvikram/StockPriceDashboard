@@ -405,41 +405,25 @@ _MARKET_CONFIG = {
 
 
 def _is_market_open(market: str) -> tuple[bool, str, str]:
-    """
-    Check if the market is currently open.
-    Returns (is_open, status_text, local_time_str).
-    """
     cfg = _MARKET_CONFIG[market]
-
     try:
         from zoneinfo import ZoneInfo
     except ImportError:
         from backports.zoneinfo import ZoneInfo
-
     tz = ZoneInfo(cfg["tz_name"])
     now = dt.datetime.now(tz)
-    weekday = now.weekday()  # 0=Mon … 6=Sun
-
+    weekday = now.weekday()
     open_time = now.replace(hour=cfg["open_h"], minute=cfg["open_m"], second=0, microsecond=0)
     close_time = now.replace(hour=cfg["close_h"], minute=cfg["close_m"], second=0, microsecond=0)
-
     local_str = now.strftime(f"%I:%M %p {cfg['tz_label']}  •  %a, %d %b %Y")
-
-    # Weekend
     if weekday >= 5:
         return False, "Market closed — Weekend", local_str
-
-    # Before open
     if now < open_time:
         mins = int((open_time - now).total_seconds() // 60)
         h, m = divmod(mins, 60)
         return False, f"Pre-market — Opens in {h}h {m}m", local_str
-
-    # After close
     if now >= close_time:
         return False, "Market closed — After hours", local_str
-
-    # During trading
     mins = int((close_time - now).total_seconds() // 60)
     h, m = divmod(mins, 60)
     return True, f"Market open — Closes in {h}h {m}m", local_str
@@ -470,7 +454,6 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # Theme toggle
     col_theme1, col_theme2 = st.columns([1, 1])
     with col_theme1:
         if st.button("☀️ Light" if is_dark else "☀️ Light ✓", use_container_width=True,
@@ -491,38 +474,20 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ------ GARP Growth Screen Toggle ------
-    st.markdown("##### 🚀 GARP Growth Screen")
-    st.caption("Scans the selected market for GARP stocks using yfinance fundamentals (market cap, sales, PEG, 1Y/3Y growth, EPS trend, quarterly profit).")
-
-    # Initialize state
     if "show_growth_screen" not in st.session_state:
         st.session_state.show_growth_screen = False
 
     if not st.session_state.show_growth_screen:
-        if st.button(
-            "🔍  Run GARP Screen",
-            use_container_width=True,
-            type="primary",
-            key="growth_screen_btn",
-        ):
+        if st.button("🚀  GARP Screen", use_container_width=True, type="primary", key="growth_screen_btn"):
             st.session_state.show_growth_screen = True
             st.rerun()
     else:
-        if st.button(
-            "✕  Stop GARP Screen",
-            use_container_width=True,
-            type="secondary",
-            key="stop_growth_btn",
-        ):
+        if st.button("✕  Back to Screener", use_container_width=True, type="secondary", key="stop_growth_btn"):
             st.session_state.show_growth_screen = False
             st.rerun()
 
     st.markdown("---")
-    st.markdown(
-        '<div class="refresh-badge">⏱ Auto-refresh: 60s</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="refresh-badge">⏱ Auto-refresh: 60s</div>', unsafe_allow_html=True)
     st.caption(f"Last refresh: {dt.datetime.now().strftime('%H:%M:%S')}")
 
 
@@ -530,17 +495,19 @@ with st.sidebar:
 # Header + Market Banner
 # ---------------------------------------------------------------------------
 
+show_garp = st.session_state.get("show_growth_screen", False)
+
 is_open, status_text, local_time = _is_market_open(market)
 exchange_name = _MARKET_CONFIG[market]["name"]
-
 banner_cls = "market-open" if is_open else "market-closed"
 dot_cls = "pulse-green" if is_open else "pulse-red"
 
+mode_label = "GARP Growth Screen" if show_garp else "Real-time stock scanner"
 st.markdown(f"""
 <div class="header-bar">
     <div>
         <h1>StockScreener</h1>
-        <p class="subtitle">Real-time stock scanner  •  {exchange_name} market</p>
+        <p class="subtitle">{mode_label}  •  {exchange_name} market</p>
     </div>
     <div class="market-banner {banner_cls}">
         <span class="pulse-dot {dot_cls}"></span>
@@ -549,27 +516,25 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-
-# ---------------------------------------------------------------------------
-# Run screener
-# ---------------------------------------------------------------------------
-
 tickers = get_tickers(market, cap=50)
 
-with st.spinner(f"Scanning {len(tickers)} {exchange_name} stocks…"):
-    results, stats = run_screen(
-        tickers=tickers,
-        pe_threshold=pe_thresh,
-        vol_threshold=vol_thresh,
-        rsi_threshold=rsi_thresh,
-        top_n=top_n,
-    )
-
 # ---------------------------------------------------------------------------
-# KPI Metrics Row
+# Main screener view
 # ---------------------------------------------------------------------------
 
-st.markdown(f"""
+if not show_garp:
+    with st.spinner(f"Scanning {len(tickers)} {exchange_name} stocks…"):
+        results, stats = run_screen(
+            tickers=tickers,
+            pe_threshold=pe_thresh,
+            vol_threshold=vol_thresh,
+            rsi_threshold=rsi_thresh,
+            top_n=top_n,
+        )
+
+    curr = "₹" if market == "IN" else "$"
+
+    st.markdown(f"""
 <div class="kpi-row">
     <div class="kpi-card">
         <div class="kpi-label">Stocks Scanned</div>
@@ -594,15 +559,10 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+    st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
 
-# ---------------------------------------------------------------------------
-# Results Table
-# ---------------------------------------------------------------------------
-
-st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
-
-if results.empty:
-    st.markdown(f"""
+    if results.empty:
+        st.markdown("""
     <div style="text-align:center; padding: 3rem 1rem;">
         <div style="font-size: 3rem; margin-bottom: 0.5rem;">🔍</div>
         <h3 style="color: var(--text-muted); font-weight: 500;">No stocks match all filters</h3>
@@ -611,156 +571,116 @@ if results.empty:
         </p>
     </div>
     """, unsafe_allow_html=True)
-else:
-    st.markdown(f"""
+    else:
+        st.markdown(f"""
     <div class="table-header">
         <span class="table-title">🏆 Top {stats['shown']} Ranked Stocks</span>
         <span class="table-badge">Composite Score = 0.5×Vol + 0.3×RSI + 0.2×(1/PE)</span>
     </div>
     """, unsafe_allow_html=True)
 
-    # Currency symbol
-    curr = "₹" if market == "IN" else "$"
+        display_df = results.copy()
+        display_df["Price"] = display_df["Price"].apply(lambda x: f"{curr}{x:,.2f}")
+        display_df["P/E"] = display_df["P/E"].apply(lambda x: f"{x:.1f}")
+        display_df["Vol Ratio"] = display_df["Vol Ratio"].apply(lambda x: f"{x:.2f}×")
+        display_df["RSI(14)"] = display_df["RSI(14)"].apply(lambda x: f"{x:.1f}")
+        display_df["Score"] = display_df["Score"].apply(lambda x: f"{x:.3f}")
 
-    # Format for display
-    display_df = results.copy()
-    display_df["Price"] = display_df["Price"].apply(lambda x: f"{curr}{x:,.2f}")
-    display_df["P/E"] = display_df["P/E"].apply(lambda x: f"{x:.1f}")
-    display_df["Vol Ratio"] = display_df["Vol Ratio"].apply(lambda x: f"{x:.2f}×")
-    display_df["RSI(14)"] = display_df["RSI(14)"].apply(lambda x: f"{x:.1f}")
-    display_df["Score"] = display_df["Score"].apply(lambda x: f"{x:.3f}")
+        st.dataframe(
+            display_df,
+            width="stretch",
+            height=min(36 * len(display_df) + 38, 950),
+            column_config={
+                "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+                "Company": st.column_config.TextColumn("Company", width="medium"),
+                "Price": st.column_config.TextColumn("Price", width="small"),
+                "P/E": st.column_config.TextColumn("P/E", width="small"),
+                "Vol Ratio": st.column_config.TextColumn("Vol Ratio", width="small"),
+                "RSI(14)": st.column_config.TextColumn("RSI(14)", width="small"),
+                "Score": st.column_config.TextColumn("Score", width="small"),
+            },
+        )
 
-    st.dataframe(
-        display_df,
-        width="stretch",
-        height=min(36 * len(display_df) + 38, 950),
-        column_config={
-            "Ticker": st.column_config.TextColumn("Ticker", width="small"),
-            "Company": st.column_config.TextColumn("Company", width="medium"),
-            "Price": st.column_config.TextColumn("Price", width="small"),
-            "P/E": st.column_config.TextColumn("P/E", width="small"),
-            "Vol Ratio": st.column_config.TextColumn("Vol Ratio", width="small"),
-            "RSI(14)": st.column_config.TextColumn("RSI(14)", width="small"),
-            "Score": st.column_config.TextColumn("Score", width="small"),
-        },
-    )
+        st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
+        st.markdown('<div class="table-title">📊 Composite Score Distribution</div>', unsafe_allow_html=True)
 
-    # ------------------------------------------------------------------
-    # Chart: Score Distribution (horizontal bar)
-    # ------------------------------------------------------------------
-    st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
-    st.markdown('<div class="table-title">📊 Composite Score Distribution</div>', unsafe_allow_html=True)
+        chart_df = results.sort_values("Score", ascending=True)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=chart_df["Ticker"],
+            x=chart_df["Score"],
+            orientation="h",
+            marker=dict(
+                color=chart_df["Score"],
+                colorscale=[
+                    [0.0, "#94A3B8" if not is_dark else "#1E293B"],
+                    [0.3, "#3B82F6"],
+                    [0.6, "#22C55E"],
+                    [1.0, "#F59E0B"],
+                ],
+                line=dict(width=0),
+                cornerradius=4,
+            ),
+            text=chart_df["Score"].apply(lambda x: f"{x:.3f}"),
+            textposition="outside",
+            textfont=dict(family="Fira Code", size=11, color=T["text_muted"]),
+            hovertemplate="<b>%{y}</b><br>Score: %{x:.3f}<extra></extra>",
+        ))
+        fig.update_layout(
+            template=T["plotly_template"],
+            paper_bgcolor=T["plotly_paper"],
+            plot_bgcolor=T["plotly_plot"],
+            font=dict(family="Fira Sans", color=T["plotly_font"]),
+            height=max(350, 30 * len(chart_df)),
+            margin=dict(l=10, r=60, t=10, b=10),
+            xaxis=dict(title="Composite Score", gridcolor=T["plotly_grid"], zeroline=False,
+                       title_font=dict(size=12, color=T["plotly_text"])),
+            yaxis=dict(gridcolor=T["plotly_grid"], tickfont=dict(family="Fira Code", size=11)),
+            bargap=0.25,
+        )
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
-    chart_df = results.sort_values("Score", ascending=True)
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        y=chart_df["Ticker"],
-        x=chart_df["Score"],
-        orientation="h",
-        marker=dict(
-            color=chart_df["Score"],
-            colorscale=[
-                [0.0, "#94A3B8" if not is_dark else "#1E293B"],
-                [0.3, "#3B82F6"],
-                [0.6, "#22C55E"],
-                [1.0, "#F59E0B"],
-            ],
-            line=dict(width=0),
-            cornerradius=4,
-        ),
-        text=chart_df["Score"].apply(lambda x: f"{x:.3f}"),
-        textposition="outside",
-        textfont=dict(family="Fira Code", size=11, color=T["text_muted"]),
-        hovertemplate="<b>%{y}</b><br>Score: %{x:.3f}<extra></extra>",
-    ))
-
-    fig.update_layout(
-        template=T["plotly_template"],
-        paper_bgcolor=T["plotly_paper"],
-        plot_bgcolor=T["plotly_plot"],
-        font=dict(family="Fira Sans", color=T["plotly_font"]),
-        height=max(350, 30 * len(chart_df)),
-        margin=dict(l=10, r=60, t=10, b=10),
-        xaxis=dict(
-            title="Composite Score",
-            gridcolor=T["plotly_grid"],
-            zeroline=False,
-            title_font=dict(size=12, color=T["plotly_text"]),
-        ),
-        yaxis=dict(
-            gridcolor=T["plotly_grid"],
-            tickfont=dict(family="Fira Code", size=11),
-        ),
-        bargap=0.25,
-    )
-
-    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
-
-    # ------------------------------------------------------------------
-    # Chart: RSI vs Volume Scatter
-    # ------------------------------------------------------------------
-    st.markdown('<div class="table-title">🔬 RSI vs Volume Ratio</div>', unsafe_allow_html=True)
-
-    scatter_df = results.copy()
-    scatter_df["Bubble"] = (1 / scatter_df["P/E"].astype(float)) * 300
-
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(
-        x=scatter_df["RSI(14)"],
-        y=scatter_df["Vol Ratio"],
-        mode="markers+text",
-        marker=dict(
-            size=scatter_df["Bubble"].clip(8, 50),
-            color=scatter_df["Score"],
-            colorscale="Viridis" if is_dark else "Bluered",
-            showscale=True,
-            colorbar=dict(title="Score", tickfont=dict(size=10)),
-            line=dict(width=1, color=T["scatter_line"]),
-            opacity=0.85,
-        ),
-        text=scatter_df["Ticker"],
-        textposition="top center",
-        textfont=dict(family="Fira Code", size=9, color=T["text_muted"]),
-        hovertemplate=(
-            "<b>%{text}</b><br>"
-            "RSI: %{x:.1f}<br>"
-            "Vol Ratio: %{y:.2f}×<br>"
-            "<extra></extra>"
-        ),
-    ))
-
-    fig2.update_layout(
-        template=T["plotly_template"],
-        paper_bgcolor=T["plotly_paper"],
-        plot_bgcolor=T["plotly_plot"],
-        font=dict(family="Fira Sans", color=T["plotly_font"]),
-        height=420,
-        margin=dict(l=10, r=10, t=10, b=10),
-        xaxis=dict(
-            title="RSI (14)",
-            gridcolor=T["plotly_grid"],
-            zeroline=False,
-            title_font=dict(size=12, color=T["plotly_text"]),
-        ),
-        yaxis=dict(
-            title="Volume Ratio (× 20-day avg)",
-            gridcolor=T["plotly_grid"],
-            zeroline=False,
-            title_font=dict(size=12, color=T["plotly_text"]),
-        ),
-    )
-
-    st.plotly_chart(fig2, width="stretch", config={"displayModeBar": False})
-
+        st.markdown('<div class="table-title">🔬 RSI vs Volume Ratio</div>', unsafe_allow_html=True)
+        scatter_df = results.copy()
+        scatter_df["Bubble"] = (1 / scatter_df["P/E"].astype(float)) * 300
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(
+            x=scatter_df["RSI(14)"],
+            y=scatter_df["Vol Ratio"],
+            mode="markers+text",
+            marker=dict(
+                size=scatter_df["Bubble"].clip(8, 50),
+                color=scatter_df["Score"],
+                colorscale="Viridis" if is_dark else "Bluered",
+                showscale=True,
+                colorbar=dict(title="Score", tickfont=dict(size=10)),
+                line=dict(width=1, color=T["scatter_line"]),
+                opacity=0.85,
+            ),
+            text=scatter_df["Ticker"],
+            textposition="top center",
+            textfont=dict(family="Fira Code", size=9, color=T["text_muted"]),
+            hovertemplate="<b>%{text}</b><br>RSI: %{x:.1f}<br>Vol Ratio: %{y:.2f}×<br><extra></extra>",
+        ))
+        fig2.update_layout(
+            template=T["plotly_template"],
+            paper_bgcolor=T["plotly_paper"],
+            plot_bgcolor=T["plotly_plot"],
+            font=dict(family="Fira Sans", color=T["plotly_font"]),
+            height=420,
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis=dict(title="RSI (14)", gridcolor=T["plotly_grid"], zeroline=False,
+                       title_font=dict(size=12, color=T["plotly_text"])),
+            yaxis=dict(title="Volume Ratio (× 20-day avg)", gridcolor=T["plotly_grid"], zeroline=False,
+                       title_font=dict(size=12, color=T["plotly_text"])),
+        )
+        st.plotly_chart(fig2, width="stretch", config={"displayModeBar": False})
 
 # ---------------------------------------------------------------------------
-# GARP Growth Screen Results (yfinance fundamentals)
+# GARP screen view
 # ---------------------------------------------------------------------------
 
-if st.session_state.get("show_growth_screen", False):
-    st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
-
+else:
     garp_market_label = "🇮🇳 NSE (Nifty 500)" if market == "IN" else "🇺🇸 NYSE (S&P 500)"
 
     st.markdown(f"""
@@ -771,16 +691,6 @@ if st.session_state.get("show_growth_screen", False):
         padding: 1.25rem 1.5rem;
         margin-bottom: 1rem;
     ">
-        <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.6rem;">
-            <span style="font-size:1.5rem;">🚀</span>
-            <span style="
-                font-size: 1.15rem;
-                font-weight: 700;
-                background: linear-gradient(135deg, #22C55E, #3B82F6);
-                -webkit-background-clip: text;
-                -webkit-text-fill-color: transparent;
-            ">GARP Growth Screen — {garp_market_label}</span>
-        </div>
         <p style="color: {T['text_muted']}; font-size: 0.78rem; margin: 0; line-height: 1.8;">
             Market Cap &gt; 1000 Cr &nbsp;|&nbsp;
             Sales &gt; 1000 Cr &nbsp;|&nbsp;
@@ -794,41 +704,40 @@ if st.session_state.get("show_growth_screen", False):
     </div>
     """, unsafe_allow_html=True)
 
-    garp_tickers = get_tickers(market, cap=50)
+    with st.spinner(f"Fetching fundamentals for {len(tickers)} stocks (this takes ~30-60s)..."):
+        garp_df, garp_stats = run_garp_screen(tickers=tickers)
 
-    with st.spinner(f"Fetching fundamentals for {len(garp_tickers)} stocks (this takes ~30-60s)..."):
-        garp_df, garp_stats = run_garp_screen(tickers=garp_tickers)
-
-    # KPI row
     st.markdown(f"""
-    <div class="kpi-row">
-        <div class="kpi-card">
-            <div class="kpi-label">Stocks Scanned</div>
-            <div class="kpi-value blue">{garp_stats['scanned']}</div>
-        </div>
-        <div class="kpi-card">
-            <div class="kpi-label">Data Fetched</div>
-            <div class="kpi-value blue">{garp_stats['scanned'] - garp_stats['failed_data']}</div>
-        </div>
-        <div class="kpi-card">
-            <div class="kpi-label">Passed All Filters</div>
-            <div class="kpi-value {'green' if garp_stats['passed'] > 0 else 'amber'}">{garp_stats['passed']}</div>
-        </div>
-        <div class="kpi-card">
-            <div class="kpi-label">Data Source</div>
-            <div class="kpi-value" style="font-size:0.85rem;">Yahoo Finance</div>
-        </div>
+<div class="kpi-row">
+    <div class="kpi-card">
+        <div class="kpi-label">Stocks Scanned</div>
+        <div class="kpi-value blue">{garp_stats['scanned']}</div>
     </div>
-    """, unsafe_allow_html=True)
+    <div class="kpi-card">
+        <div class="kpi-label">Data Fetched</div>
+        <div class="kpi-value blue">{garp_stats['scanned'] - garp_stats['failed_data']}</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Passed All Filters</div>
+        <div class="kpi-value {'green' if garp_stats['passed'] > 0 else 'amber'}">{garp_stats['passed']}</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Data Source</div>
+        <div class="kpi-value" style="font-size:0.85rem;">Yahoo Finance</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
 
     if garp_df.empty:
-        st.markdown(f"""
+        st.markdown("""
         <div style="text-align:center; padding: 2rem 1rem;">
             <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">📉</div>
             <h3 style="color: var(--text-muted); font-weight: 500;">No stocks passed all GARP filters</h3>
             <p style="color: var(--text-muted); font-size: 0.82rem;">
                 The AND logic requires all 8 conditions to pass simultaneously.<br>
-                Try running against a different market or check back when quarterly results update.
+                Try switching to a different market or check back when quarterly results update.
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -842,9 +751,7 @@ if st.session_state.get("show_growth_screen", False):
 
         curr = "₹" if market == "IN" else "$"
         display_garp = garp_df.copy()
-        display_garp["Price"] = display_garp["Price"].apply(
-            lambda x: f"{curr}{x:,.2f}" if x else "—"
-        )
+        display_garp["Price"] = display_garp["Price"].apply(lambda x: f"{curr}{x:,.2f}" if x else "—")
 
         st.dataframe(
             display_garp,
@@ -865,11 +772,6 @@ if st.session_state.get("show_growth_screen", False):
                 "Qtr Profit Trend": st.column_config.TextColumn("Qtr Trend", width="small"),
             },
         )
-
-    if st.button("✕  Close GARP Screen", key="close_growth"):
-        st.session_state.show_growth_screen = False
-        st.rerun()
-
 
 # ---------------------------------------------------------------------------
 # Footer
