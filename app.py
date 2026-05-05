@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
-from screener import run_screen
+from screener import run_garp_screen, run_screen
 from universe import get_tickers
 
 # ---------------------------------------------------------------------------
@@ -490,6 +490,35 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
+
+    # ------ GARP Growth Screen Toggle ------
+    st.markdown("##### 🚀 GARP Growth Screen")
+    st.caption("Scans the selected market for GARP stocks using yfinance fundamentals (market cap, sales, PEG, 1Y/3Y growth, EPS trend, quarterly profit).")
+
+    # Initialize state
+    if "show_growth_screen" not in st.session_state:
+        st.session_state.show_growth_screen = False
+
+    if not st.session_state.show_growth_screen:
+        if st.button(
+            "🔍  Run GARP Screen",
+            use_container_width=True,
+            type="primary",
+            key="growth_screen_btn",
+        ):
+            st.session_state.show_growth_screen = True
+            st.rerun()
+    else:
+        if st.button(
+            "✕  Stop GARP Screen",
+            use_container_width=True,
+            type="secondary",
+            key="stop_growth_btn",
+        ):
+            st.session_state.show_growth_screen = False
+            st.rerun()
+
+    st.markdown("---")
     st.markdown(
         '<div class="refresh-badge">⏱ Auto-refresh: 60s</div>',
         unsafe_allow_html=True,
@@ -723,6 +752,123 @@ else:
     )
 
     st.plotly_chart(fig2, width="stretch", config={"displayModeBar": False})
+
+
+# ---------------------------------------------------------------------------
+# GARP Growth Screen Results (yfinance fundamentals)
+# ---------------------------------------------------------------------------
+
+if st.session_state.get("show_growth_screen", False):
+    st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
+
+    garp_market_label = "🇮🇳 NSE (Nifty 500)" if market == "IN" else "🇺🇸 NYSE (S&P 500)"
+
+    st.markdown(f"""
+    <div style="
+        background: {T["bg_card"]};
+        border: 1px solid {T["border"]};
+        border-radius: 12px;
+        padding: 1.25rem 1.5rem;
+        margin-bottom: 1rem;
+    ">
+        <div style="display:flex; align-items:center; gap:0.6rem; margin-bottom:0.6rem;">
+            <span style="font-size:1.5rem;">🚀</span>
+            <span style="
+                font-size: 1.15rem;
+                font-weight: 700;
+                background: linear-gradient(135deg, #22C55E, #3B82F6);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+            ">GARP Growth Screen — {garp_market_label}</span>
+        </div>
+        <p style="color: {T['text_muted']}; font-size: 0.78rem; margin: 0; line-height: 1.8;">
+            Market Cap &gt; 1000 Cr &nbsp;|&nbsp;
+            Sales &gt; 1000 Cr &nbsp;|&nbsp;
+            PEG 0&ndash;2 &nbsp;|&nbsp;
+            Sales Growth &gt; 15% (1Y &amp; 3Y CAGR) &nbsp;|&nbsp;
+            EPS YoY &gt; 1.15&times; &nbsp;|&nbsp;
+            EPS CAGR 3Y &gt; 15% &nbsp;|&nbsp;
+            Qtr Profit &gt; 3Q Ago
+            &nbsp;&nbsp;<em style="color:{T['accent_blue']};">Source: Yahoo Finance via yfinance</em>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    garp_tickers = get_tickers(market, cap=50)
+
+    with st.spinner(f"Fetching fundamentals for {len(garp_tickers)} stocks (this takes ~30-60s)..."):
+        garp_df, garp_stats = run_garp_screen(tickers=garp_tickers)
+
+    # KPI row
+    st.markdown(f"""
+    <div class="kpi-row">
+        <div class="kpi-card">
+            <div class="kpi-label">Stocks Scanned</div>
+            <div class="kpi-value blue">{garp_stats['scanned']}</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Data Fetched</div>
+            <div class="kpi-value blue">{garp_stats['scanned'] - garp_stats['failed_data']}</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Passed All Filters</div>
+            <div class="kpi-value {'green' if garp_stats['passed'] > 0 else 'amber'}">{garp_stats['passed']}</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Data Source</div>
+            <div class="kpi-value" style="font-size:0.85rem;">Yahoo Finance</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if garp_df.empty:
+        st.markdown(f"""
+        <div style="text-align:center; padding: 2rem 1rem;">
+            <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">📉</div>
+            <h3 style="color: var(--text-muted); font-weight: 500;">No stocks passed all GARP filters</h3>
+            <p style="color: var(--text-muted); font-size: 0.82rem;">
+                The AND logic requires all 8 conditions to pass simultaneously.<br>
+                Try running against a different market or check back when quarterly results update.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div class="table-header">
+            <span class="table-title">🏆 GARP Leaders — ranked by PEG ratio</span>
+            <span class="table-badge">{garp_stats['passed']} stocks matched</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        curr = "₹" if market == "IN" else "$"
+        display_garp = garp_df.copy()
+        display_garp["Price"] = display_garp["Price"].apply(
+            lambda x: f"{curr}{x:,.2f}" if x else "—"
+        )
+
+        st.dataframe(
+            display_garp,
+            use_container_width=True,
+            height=min(36 * len(display_garp) + 38, 900),
+            column_config={
+                "Ticker": st.column_config.TextColumn("Ticker", width="small"),
+                "Company": st.column_config.TextColumn("Company", width="medium"),
+                "Price": st.column_config.TextColumn("Price", width="small"),
+                "Mkt Cap (Cr)": st.column_config.NumberColumn("Mkt Cap (Cr)", format="%d"),
+                "Sales (Cr)": st.column_config.NumberColumn("Sales (Cr)", format="%d"),
+                "PEG": st.column_config.NumberColumn("PEG", format="%.2f"),
+                "P/E": st.column_config.NumberColumn("P/E", format="%.1f"),
+                "Sales Gr 1Y": st.column_config.TextColumn("Sales Gr 1Y", width="small"),
+                "Sales Gr 3Y": st.column_config.TextColumn("Sales Gr 3Y", width="small"),
+                "EPS YoY": st.column_config.TextColumn("EPS YoY", width="small"),
+                "EPS Gr 3Y": st.column_config.TextColumn("EPS Gr 3Y", width="small"),
+                "Qtr Profit Trend": st.column_config.TextColumn("Qtr Trend", width="small"),
+            },
+        )
+
+    if st.button("✕  Close GARP Screen", key="close_growth"):
+        st.session_state.show_growth_screen = False
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
